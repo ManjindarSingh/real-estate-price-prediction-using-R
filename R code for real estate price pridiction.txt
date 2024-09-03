@@ -1,0 +1,116 @@
+library(shiny)
+library(dplyr)
+library(plotly)  # Load the plotly package
+
+# Load your real estate dataset (replace 'your_dataset.csv' with your file path)
+real_estate_data <- read.csv('dwfinal.csv')
+real_estate_data$price <- as.numeric(gsub("[^0-9.]", "", real_estate_data$price))
+
+# Define the UI for the Shiny web app
+ui <- fluidPage(
+  conditionalPanel(
+    condition = "!output.welcome_page",
+    titlePanel("Real Estate Recommendation model:- REAL ESTATE PRICE PREDICTION"),
+    sidebarLayout(
+      sidebarPanel(
+        selectInput("customer_type", "Customer Type", choices = c("Residence", "Investing")),
+        selectInput("property_type", "Property Type", unique(real_estate_data$property_type)),
+        conditionalPanel(
+          condition = 'input.customer_type == "Residence"',
+          sliderInput("price_range", "Price Range", min = 0, max = 10000000, value = c(0, 1000000)),
+          sliderInput("bedrooms", "Number of Bedrooms", min = 1, max = 5, value = 2)
+        ),
+        selectInput("region", "Preferred Region", unique(real_estate_data$region)),
+        actionButton("search_button", "Search")
+      ),
+      mainPanel(
+        tabsetPanel(
+          tabPanel("Recommendations", tableOutput("recommendation")),
+          tabPanel("Property Type Distribution", tableOutput("property_type_distribution")),
+          tabPanel("Overall Analysis", plotlyOutput("overall_pie_chart"))  # Add the pie chart
+        )
+      )
+    )
+  ),
+  uiOutput("welcome_page")
+)
+
+# Define the server logic
+server <- function(input, output, session) {
+  output$welcome_page <- renderUI({
+    if (!is.null(input$customer_type)) {
+      NULL
+    } else {
+      tagList(
+        h1("Delulu"),
+        selectInput("customer_type", "Select your customer type", choices = c("Residence", "Investing")),
+        actionButton("customer_type_selected", "Continue")
+      )
+    }
+  })
+  
+  calculate_similarity <- function(user_input, data) {
+    data$similarity <- sqrt(
+      (data$price - user_input$price)^2 +
+        (data$bedrooms - user_input$bedrooms)^2
+    )
+    
+    filtered_data <- data %>%
+      filter(
+        property_type == user_input$property_type,
+        region == user_input$region,
+        price >= input$price_range[1],
+        price <= input$price_range[2]
+      )
+    
+    recommended_properties <- filtered_data %>%
+      arrange(similarity) %>%
+      select(locality, price)
+    
+    recommended_properties
+  }
+  
+  observeEvent(input$search_button, {
+    user_input <- data.frame(
+      property_type = input$property_type,
+      price = input$price_range[1],
+      bedrooms = input$bedrooms,
+      region = input$region
+    )
+    
+    if (input$customer_type == "Residence") {
+      recommended_properties <- calculate_similarity(user_input, real_estate_data)
+      output$property_type_distribution <- NULL
+      output$overall_pie_chart <- NULL
+    } else if (input$customer_type == "Investing") {
+      # Calculate mean price by property type for the selected area
+      area_mean_price <- real_estate_data %>%
+        filter(region == input$region) %>%
+        group_by(property_type) %>%
+        summarise(mean_price = mean(price))
+      recommended_properties <- area_mean_price
+      
+      # Calculate property type distribution for the selected area
+      property_type_distribution <- real_estate_data %>%
+        filter(region == input$region) %>%
+        group_by(property_type) %>%
+        summarize(percentage = n() / nrow(.))
+      output$property_type_distribution <- renderTable(property_type_distribution)
+      
+      # Calculate the overall property type distribution
+      overall_distribution <- real_estate_data %>%
+        group_by(property_type) %>%
+        summarize(percentage = n() / nrow(.))
+      
+      # Create a pie chart
+      output$overall_pie_chart <- renderPlotly({
+        plot_ly(overall_distribution, labels = ~property_type, values = ~percentage, type = "pie") %>%
+          layout(title = "Overall Property Type Distribution")
+      })
+    }
+    
+    output$recommendation <- renderTable(recommended_properties)
+  })
+}
+
+shinyApp(ui = ui, server = server)
